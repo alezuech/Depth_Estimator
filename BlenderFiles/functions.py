@@ -3,10 +3,7 @@ import bmesh
 from mathutils import Vector
 import numpy as np
 import math
-import mathutils
 from bpy import context
-
-
 
 # checks the sensor_fit and returns the corresponding FOV for each dimension
 def get_FOVs():
@@ -91,7 +88,6 @@ def bmesh_check_intersect_objects(obj, obj2):
     bm2.to_mesh(me_tmp)
     bm2.free()
     obj_tmp = bpy.data.objects.new(name=me_tmp.name, object_data=me_tmp)
-    # scene.objects.link(obj_tmp)
     bpy.context.collection.objects.link(obj_tmp)
     ray_cast = obj_tmp.ray_cast
 
@@ -117,7 +113,6 @@ def bmesh_check_intersect_objects(obj, obj2):
             intersect = True
             break
 
-    # scene.objects.unlink(obj_tmp)
     bpy.context.collection.objects.unlink(obj_tmp)
     bpy.data.objects.remove(obj_tmp)
     bpy.data.meshes.remove(me_tmp)
@@ -136,3 +131,116 @@ def object_vertices(object):
         new_v[i] = co_final
 
     return new_v
+
+def dot_v3v3(v0, v1):
+    return (
+        (v0[0] * v1[0]) +
+        (v0[1] * v1[1]) +
+        (v0[2] * v1[2])
+    )
+
+def mul_v3_d(v0, d):
+    return Vector([
+        v0[0] * d,
+        v0[1] * d,
+        v0[2] * d,]
+    )
+
+def line_plane_intersection(p0, n, l0, l):
+    '''
+    p0: it is a point belonging to the plane.
+    n: it is the normal of the plane.
+    l0: it is a point belonging to the line.
+    l: it is a vector in the direction of the line.
+    from https://en.wikipedia.org/wiki/Line%E2%80%93plane_intersection#:~:text=In%20analytic%20geometry%2C%20the%20intersection,the%20plane%20but%20outside%20it.
+    '''
+    if dot_v3v3(l, n)==0: return np.nan # the line is parallel to the plane. It could be either contained in it or not.
+    d = dot_v3v3(p0 - l0, n)/dot_v3v3(l, n)
+    return l0 + mul_v3_d(l, d)
+
+def get_face_normal(v1, v2, v3):
+    '''
+    v1, v2, v3: three Vector variables of positions of vertices of the same face.
+    '''
+    v12 = v1 - v2
+    v13 = v1 - v3
+    n = [(v1[1]*v2[2]) - (v1[2]*v2[1]), (v1[2]*v2[0]) - (v1[0]*v2[2]), (v1[0]*v2[1]) - (v1[1]*v2[0])]
+    n = Vector(n).normalized()
+    return n
+
+def closest_intersection(cam_loc, scene_mesh, p_co):
+    '''
+    Computes a line between cam_loc and fc and returns the intersection with scene_mesh closest to cam_loc.
+    cam_loc: location of the camera.
+    scene_mesh: it is a bmesh of all the joint objects in the scene.
+    p_co: coordinates of one of the point from the grid in the FOV
+    '''
+    distances =[]
+    # for i, f in enumerate(scene_mesh.faces):
+    for f in scene_mesh.faces:
+        # if i>4: break
+        n = get_face_normal(f.edges[0].verts[0].co, f.edges[0].verts[1].co, f.edges[1].verts[1].co)
+        intersect = line_plane_intersection(f.edges[0].verts[0].co, n, cam_loc, cam_loc-p_co)
+        try:
+            distances.append(intersect.length)
+        except:
+            distances.append(Vector((0, 0, 0)).length)
+            print(intersect)
+    return np.nanmin(distances)
+
+def cartesian_to_spherical(x, y, z):
+    '''
+    It converts the cartesian coordinates to spherical ones.
+    Note that the 'elevation' does not exactly correspond to the 'phi' angle usually used.
+    Check the source for a visual reference.    
+    source: https://it.mathworks.com/help/matlab/ref/cart2sph.html
+    '''
+    azimuth = np.arctan2(y,x)
+    elevation = np.arctan2(z,np.sqrt(x**2 + y**2))
+    r = np.sqrt(x**2 + y**2 + z**2)
+    return azimuth, elevation, r
+
+def spherical_to_cartesian(azimuth, elevation, r):
+    '''
+    azimuth: azimuth in radians.
+    elevation: elevation in radians.
+    r: range.
+    source: https://it.mathworks.com/help/matlab/ref/sph2cart.html
+    '''
+    x = r * np.cos(elevation) * np.cos(azimuth)
+    y = r * np.cos(elevation) * np.sin(azimuth)
+    z = r * np.sin(elevation)
+    return x, y, z
+
+def new_cartesian(cam_loc, h_FOV_shift, v_FOV_shift, d_mul: float = 2):
+    '''
+    Returns a Vector of the cartesian coordinates of a point inside the FOV and with a distance r from the camera.
+    cam_loc: camera cartesian coordinates.
+    h_FOV_shift: amount of horizontal shift in radians from the center of the FOV.
+    v_FOV_shift: amount of vertival shift in radians from the center of the FOV.
+    '''
+
+    # convert the camera location to spherical coordinates
+    az_c, el_c, r_c = cartesian_to_spherical(cam_loc[0],cam_loc[1],cam_loc[2])
+
+
+    # obtain coordinates for the point projected on the plane perpendicular to the x axis
+    x = r_c
+    hypotenuse = x / np.cos(h_FOV_shift)
+    y = np.sin(h_FOV_shift)*hypotenuse
+    hypotenuse = x / np.cos(v_FOV_shift)
+    z = np.sin(v_FOV_shift)*hypotenuse
+
+    # get the point spherical coordinates if it had y=0. Then, apply a shift to its elevation angle.
+    # applying the lateral (y axis) shift allows to avoid the convergence that happens when converging to the poles.
+    az_p, el_p, r_p = cartesian_to_spherical(x,0,z*d_mul)
+    el_p = el_p - el_c
+    x_p,y_p,z_p = spherical_to_cartesian(az_p, el_p, r_p)
+    y_p = y_p + y*d_mul
+
+    # now repeat the cart2sph -> sph2cart steps and update the azimuth (or theta) angle.
+    az_p, el_p, r_p = cartesian_to_spherical(x_p,y_p,z_p)
+    az_p = az_p + az_c + np.pi
+    x_p,y_p,z_p = spherical_to_cartesian(az_p, el_p, r_p)
+
+    return Vector((x_p, y_p, z_p))

@@ -5,10 +5,10 @@ import numpy as np
 import math
 import mathutils
 from bpy import context
+# from matplotlib import pyplot as plt
 
 # run this script from the command line with this command
-# blender --background main.blend --python main.py
-
+# blender --background main.blend --python create_dataset.py
 
 # this is needed to import functions from another python file
 import sys
@@ -40,80 +40,35 @@ bpy.ops.constraint.apply(constraint='Track To', owner='OBJECT', report=False)
 object_to_delete = bpy.data.objects['myEmpty']
 bpy.data.objects.remove(object_to_delete, do_unlink=True)
 
-# get the FOVs, create a plane parallel to the camera and place it in front of it, then resize it to match the FOV
+# get the FOVs
 h, v = get_FOVs()
-camera_rotation = camera.rotation_euler
-background_loc = -camera.location * 1
-camera_background_dist = VectorLength(background_loc) + VectorLength(camera.location)
-b = abs(2 * math.tan(math.radians(h)/2)*camera_background_dist)
-bpy.ops.mesh.primitive_plane_add(size = b, enter_editmode=False, align='WORLD', location=background_loc, scale=(1,1,1), rotation=camera_rotation)
-for obj in bpy.context.selected_objects:
-    obj.name = "BackgroundPlane"
-
-
-# vertices = object_vertices(context.active_object)
-vertices = object_vertices(bpy.data.objects["Plane.001"])
-for v in vertices:
-    print(v)
-
-obj1 = bpy.data.objects["BackgroundPlane"]
-obj2 = bpy.data.objects["Cube.001"]
-
-check = bmesh_check_intersect_objects(obj1, obj2)
-
-print(f'\nIntersection: {check}')
-
-
-
+camera_rot = camera.rotation_euler
 x_res = bpy.data.scenes['Scene'].render.resolution_x
 y_res = bpy.data.scenes['Scene'].render.resolution_y
 
-subdivision_levels = int(math.log2(x_res))
-print('levels: ', subdivision_levels)
+cube = bpy.data.objects["Cube.001"]
+depth_img = np.zeros((x_res, y_res))
+
+# compute, in degrees, the horizontal and vertical shifts from the center of the POV
+for j in range(y_res):
+    for i in range(x_res):
+        h_shift = -(h/2 - (i+1)*(h/x_res)+(h/x_res)/2)
+        v_shift = -(h/2 - (j+1)*(v/y_res)+(v/y_res)/2)
+        sphere_loc = new_cartesian(cam_loc, h_shift*np.pi/180, v_shift*np.pi/180)
+        bpy.ops.mesh.primitive_uv_sphere_add(radius=0.1, enter_editmode=False, align='WORLD', location=sphere_loc, scale=(1, 1, 1))
+        
+        my_point = bpy.context.view_layer.objects.active # assign variable
+        my_point.select_set(True) # select the object
+        cube_bm = bmesh.new()   # create an empty BMesh
+        cube_bm.from_mesh(cube.data)  
+        d_min = closest_intersection(cam_loc, cube_bm, my_point.location)
+        depth_img[i,j] = d_min
+
+obj = bpy.data.objects["Cube"]
+# closest_intersection(cam_loc, obj, )
+print('cube location: ', obj.location)
+np.save('depth.npy', depth_img)
+# plt.imshow(depth_img)
+# plt.show()
 
 
-# pick any object
-obj = bpy.data.objects['BackgroundPlane']
-# set the object to active
-bpy.context.view_layer.objects.active = obj
-# this operator will 'work' or 'operate' on the active object we just set
-# bpy.ops.object.modifier_apply(modifier="my_modifier_name")
-
-
-# bpy.context.view_layer.objects.active = bpy.data.objects["BackgroundPlane"]
-bpy.ops.object.modifier_add(type='MULTIRES')
-for i in range(subdivision_levels):
-    bpy.ops.object.multires_subdivide(modifier="Multires", mode='SIMPLE')
-bpy.ops.object.modifier_apply(modifier="Multires")
-
-
-
-
-
-
-
-
-bpy.ops.object.mode_set(mode='EDIT')
-
-ob = bpy.context.active_object
-me = ob.data
-bm = bmesh.from_edit_mesh(me)
-
-for f in bm.faces:
-    print(f)
-    for e in f.edges:
-        for v in e.verts:
-            print(f'face {f.index} - edge {e.index} - vert {v.co}')
-    # if f.select:
-    #     print(f.index)
-    #     for v in bm.verts:
-    #         print(v.co)
-
-
-# apply a subdivision modifier to the plane to match the pixels of the final image
-# create the single "pyramids"
-# for each pyramid, check what are the intersected objects
-# apply a simple subdivision modifier to the intersected mesh
-# obtain the intersection between a pyramid and a copy of the scene
-# apply a remesh modifier to the intersected mesh
-# 
